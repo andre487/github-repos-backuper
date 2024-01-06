@@ -13,6 +13,7 @@ import urllib.parse
 import requests
 
 GH_API_BASE = 'https://api.github.com'
+BB_API_BASE = 'https://api.bitbucket.org/2.0'
 GIT_OP_TIMEOUT = 1800
 
 next_page_re = re.compile(r'.*<(?P<next_url>[^>]+)>; rel="next".*')
@@ -21,12 +22,18 @@ non_path_symbols_re = re.compile(r'[:\\?"\'<>|+%!@]+|\.\.')
 
 
 class Args(tp.NamedTuple):
-    gh_token_file: str
-    gh_token: str
-
-    backup_dir: str
+    github: bool
+    bitbucket: bool
     include_private: bool
 
+    gh_token_file: tp.Optional[str]
+    gh_token: tp.Optional[str]
+
+    bb_auth_file: tp.Optional[str]
+    bb_user: tp.Optional[str]
+    bb_password: tp.Optional[str]
+
+    backup_dir: str
     logs_dir: tp.Optional[str]
 
 
@@ -34,7 +41,12 @@ def main() -> None:
     args = get_args()
     setup_logging(args)
 
-    repos = get_gh_repos_list(args.gh_token, include_private=args.include_private)
+    repos = []
+    if args.github:
+        repos.extend(get_gh_repos_list(args.gh_token, include_private=args.include_private))
+    if args.bitbucket:
+        repos.extend(get_bb_repos_list(args.bb_user, args.bb_password))
+    random.shuffle(repos)
 
     repos_count = len(repos)
     logging.info(f'Have {repos_count} repos to backup')
@@ -53,18 +65,45 @@ def main() -> None:
 
 def get_args() -> Args:
     parser = argparse.ArgumentParser()
-    parser.add_argument('--gh-token-file', default='~/.tokens/github-repos-list')
-    parser.add_argument('--backup-dir', default='/tmp/gh-repos-backup')
+    parser.add_argument('--github', action='store_true')
+    parser.add_argument('--bitbucket', action='store_true')
     parser.add_argument('--no-private', action='store_true')
+    parser.add_argument('--gh-token-file', default='~/.tokens/github-repos-list')
+    parser.add_argument('--bb-auth-file', default='~/.tokens/bitbucket-repos-list')
+    parser.add_argument('--backup-dir', default='/tmp/gh-repos-backup', required=True)
     parser.add_argument('--logs-dir')
     raw_args = parser.parse_args()
 
-    gh_token_file = os.path.expanduser(raw_args.gh_token_file)
+    if not (raw_args.github or raw_args.bitbucket):
+        parser.error('At least one service should be selected')
+
+    gh_token = gh_token_file = None
+    if raw_args.github:
+        gh_token_file = os.path.expanduser(raw_args.gh_token_file)
+        gh_token = read_text_file(gh_token_file)
+
+    bb_user = bb_password = bb_auth_file = None
+    if raw_args.bitbucket:
+        bb_auth_file = os.path.expanduser(raw_args.bb_auth_file)
+        bb_auth_data = read_text_file(bb_auth_file).splitlines()
+        if len(bb_auth_data) < 2:
+            raise Exception('BitBucket auth file should contain lines: <login>\\n<app_password>')
+        bb_user = bb_auth_data[0].strip()
+        bb_password = bb_auth_data[1].strip()
+
     return Args(
-        gh_token_file=gh_token_file,
-        gh_token=read_text_file(gh_token_file),
-        backup_dir=os.path.expanduser(raw_args.backup_dir),
+        github=raw_args.github,
+        bitbucket=raw_args.bitbucket,
         include_private=(not raw_args.no_private),
+
+        gh_token_file=gh_token_file,
+        gh_token=gh_token,
+
+        bb_auth_file=bb_auth_file,
+        bb_user=bb_user,
+        bb_password=bb_password,
+
+        backup_dir=os.path.expanduser(raw_args.backup_dir),
         logs_dir=raw_args.logs_dir,
     )
 
@@ -106,9 +145,11 @@ def get_gh_repos_list(
     if next_matches := next_page_re.match(resp.headers.get('link', '')):
         next_url_data = urllib.parse.urlparse(next_matches.group('next_url'))
         next_url_params = urllib.parse.parse_qs(next_url_data.query)
-        result.extend(
-            get_gh_repos_list(gh_token, include_private=include_private, query_params={'page': next_url_params['page']})
-        )
+        result.extend(get_gh_repos_list(
+            gh_token,
+            include_private=include_private,
+            query_params={'page': next_url_params['page']},
+        ))
 
     return result
 
@@ -121,15 +162,72 @@ def make_gh_api_request(
     data: tp.Optional[tp.Dict] = None,
 ) -> requests.Response:
     url_query = urllib.parse.urlencode(query_params or {}, doseq=True)
-    api_url = f'{GH_API_BASE}{handler}?{url_query}'
     resp = requests.request(
         method=http_method,
-        url=api_url,
+        url=f'{GH_API_BASE}{handler}?{url_query}',
         headers={
             'Accept': 'application/vnd.github+json',
             'Authorization': f'Bearer {gh_token}',
             'X-GitHub-Api-Version': '2022-11-28',
         },
+        data=data,
+    )
+    resp.raise_for_status()
+    return resp
+
+
+def get_bb_repos_list(
+    bb_user: str,
+    bb_password: str,
+    include_private: bool = True,
+    query_params: tp.Optional[tp.Dict] = None,
+) -> tp.List[str]:
+    query_params = query_params or {}
+    query_params.setdefault('role', 'member')
+
+    resp = make_bb_api_request(bb_user, bb_password, '/repositories', query_params=query_params)
+    resp_json = resp.json()
+
+    result = []
+    for item in resp_json['values']:
+        if item['is_private'] and not include_private:
+            continue
+
+        ssh_clone_link = None
+        for link_data in item['links']['clone']:
+            if link_data['name'] == 'ssh':
+                ssh_clone_link = link_data['href']
+                break
+
+        if ssh_clone_link:
+            result.append(ssh_clone_link)
+
+    if next_link := resp_json.get('next'):
+        next_url_data = urllib.parse.urlparse(next_link)
+        next_url_params = urllib.parse.parse_qs(next_url_data.query)
+        result.extend(get_bb_repos_list(
+            bb_user,
+            bb_password,
+            include_private=include_private,
+            query_params=next_url_params,
+        ))
+
+    return result
+
+
+def make_bb_api_request(
+    bb_user: str,
+    bb_password: str,
+    handler: str,
+    http_method: str = 'GET',
+    query_params: tp.Optional[tp.Dict] = None,
+    data: tp.Optional[tp.Dict] = None,
+):
+    url_query = urllib.parse.urlencode(query_params or {}, doseq=True)
+    resp = requests.request(
+        method=http_method,
+        url=f'{BB_API_BASE}{handler}?{url_query}',
+        auth=(bb_user, bb_password),
         data=data,
     )
     resp.raise_for_status()
