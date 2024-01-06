@@ -377,7 +377,7 @@ def backup_repo(git_url: str, backup_dir: str) -> None:
     repo_dir = non_path_symbols_re.sub('_', os.path.join(backup_dir, host, user_name, last_path_part))
     logging.info(f'Using dir: {repo_dir}')
 
-    is_new_repo = not os.path.exists(repo_dir)
+    is_new_repo = not os.path.exists(os.path.join(repo_dir, '.git'))
     os.makedirs(repo_dir, exist_ok=True)
     if is_new_repo:
         sp.check_call(('git', 'clone', '--recurse-submodules', '--mirror', git_url, repo_dir), timeout=git_op_timeout)
