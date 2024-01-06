@@ -10,15 +10,29 @@ import time
 import typing as tp
 import urllib.parse
 
-import requests
+from requests import Response, Session
+from requests.adapters import HTTPAdapter, Retry
 
 GH_API_BASE = 'https://api.github.com'
 BB_API_BASE = 'https://api.bitbucket.org/2.0'
-GIT_OP_TIMEOUT = 1800
+GL_API_BASE = 'https://gitlab.com/api/v4'
+DEFAULT_GIT_OP_TIMEOUT = 3600
 
 next_page_re = re.compile(r'.*<(?P<next_url>[^>]+)>; rel="next".*')
 git_suffix_re = re.compile(r'(.*)(?:\.git)?$')
 non_path_symbols_re = re.compile(r'[:\\?"\'<>|+%!@]+|\.\.')
+git_op_timeout = DEFAULT_GIT_OP_TIMEOUT
+
+http_session = Session()
+http_session.mount(
+    'https://',
+    HTTPAdapter(max_retries=Retry(
+        total=5,
+        backoff_factor=0.1,
+        status_forcelist=(403, 429, 500, 501, 502, 503, 504),
+        raise_on_redirect=False,
+    ))
+)
 
 
 class Args(tp.NamedTuple):
@@ -64,6 +78,8 @@ def main() -> None:
 
 
 def get_args() -> Args:
+    global git_op_timeout
+
     parser = argparse.ArgumentParser()
     parser.add_argument('--github', action='store_true')
     parser.add_argument('--bitbucket', action='store_true')
@@ -71,11 +87,14 @@ def get_args() -> Args:
     parser.add_argument('--gh-token-file', default='~/.tokens/github-repos-list')
     parser.add_argument('--bb-auth-file', default='~/.tokens/bitbucket-repos-list')
     parser.add_argument('--backup-dir', default='/tmp/gh-repos-backup', required=True)
+    parser.add_argument('--git-op-timeout', type=int, default=DEFAULT_GIT_OP_TIMEOUT)
     parser.add_argument('--logs-dir')
     raw_args = parser.parse_args()
 
     if not (raw_args.github or raw_args.bitbucket):
         parser.error('At least one service should be selected')
+
+    git_op_timeout = raw_args.git_op_timeout
 
     gh_token = gh_token_file = None
     if raw_args.github:
@@ -160,9 +179,9 @@ def make_gh_api_request(
     http_method: str = 'GET',
     query_params: tp.Optional[tp.Dict] = None,
     data: tp.Optional[tp.Dict] = None,
-) -> requests.Response:
+) -> Response:
     url_query = urllib.parse.urlencode(query_params or {}, doseq=True)
-    resp = requests.request(
+    resp = http_session.request(
         method=http_method,
         url=f'{GH_API_BASE}{handler}?{url_query}',
         headers={
@@ -224,7 +243,7 @@ def make_bb_api_request(
     data: tp.Optional[tp.Dict] = None,
 ):
     url_query = urllib.parse.urlencode(query_params or {}, doseq=True)
-    resp = requests.request(
+    resp = http_session.request(
         method=http_method,
         url=f'{BB_API_BASE}{handler}?{url_query}',
         auth=(bb_user, bb_password),
@@ -252,8 +271,8 @@ def backup_repo(git_url: str, backup_dir: str) -> None:
     is_new_repo = not os.path.exists(repo_dir)
     os.makedirs(repo_dir, exist_ok=True)
     if is_new_repo:
-        sp.check_call(('git', 'clone', '--recurse-submodules', '--mirror', git_url, repo_dir), timeout=GIT_OP_TIMEOUT)
-    sp.check_call(('git', 'fetch', '--all', '--recurse-submodules', '--tags'), cwd=repo_dir, timeout=GIT_OP_TIMEOUT)
+        sp.check_call(('git', 'clone', '--recurse-submodules', '--mirror', git_url, repo_dir), timeout=git_op_timeout)
+    sp.check_call(('git', 'fetch', '--all', '--recurse-submodules', '--tags'), cwd=repo_dir, timeout=git_op_timeout)
 
     backup_time = time.perf_counter() - start_time
     logging.info(f'Backup time: {backup_time}')
