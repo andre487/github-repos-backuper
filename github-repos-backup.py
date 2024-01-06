@@ -18,6 +18,7 @@ GH_API_BASE = 'https://api.github.com'
 BB_API_BASE = 'https://api.bitbucket.org/2.0'
 GL_API_BASE = 'https://gitlab.com/api/v4'
 DEFAULT_GIT_OP_TIMEOUT = 600
+WAIT_BETWEEN_REPOS = False
 
 next_page_re = re.compile(r'.*<(?P<next_url>[^>]+)>; rel="next".*')
 last_page_re = re.compile(r'.*<(?P<next_url>[^>]+)>; rel="last".*')
@@ -97,7 +98,7 @@ def main() -> None:
         logging.info(f'Backing up [{cnt}/{repos_count}]: {git_url}')
         try:
             backup_repo(git_url, args.backup_dir)
-            if cnt < repos_count:
+            if WAIT_BETWEEN_REPOS and cnt < repos_count:
                 w_time = random.randint(1, 10)
                 logging.info(f'Waiting for {w_time} seconds')
                 time.sleep(w_time)
@@ -107,9 +108,11 @@ def main() -> None:
             logging.exception(f'Unexpected error when handling repo {git_url}: {e}')
 
     if errors_count:
-        logging.error(f'Errors occurred: {errors_count}')
+        logging.error(f'Errors occurred from {repos_count} repos: {errors_count}')
         logging.error(f'Failed repos: {", ".join(failed_repos)}')
         sys.exit(1)
+
+    logging.info(f'Success! {errors_count} errors from {repos_count} repos')
 
 
 def get_args() -> Args:
