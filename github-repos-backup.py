@@ -6,6 +6,7 @@ import os
 import random
 import re
 import subprocess as sp
+import sys
 import time
 import typing as tp
 import urllib.parse
@@ -42,7 +43,6 @@ class Args(tp.NamedTuple):
     github: bool
     bitbucket: bool
     gitlab: bool
-    include_private: bool
 
     gh_token: tp.Optional[str]
     bb_user: tp.Optional[str]
@@ -57,15 +57,30 @@ def main() -> None:
     args = get_args()
     setup_logging(args)
 
+    were_errors = False
     repos = []
     if args.github:
-        repos.extend(get_gh_repos_list(args.gh_token, include_private=args.include_private))
-    if args.bitbucket:
-        repos.extend(get_bb_repos_list(args.bb_user, args.bb_password, include_private=args.include_private))
-    if args.gitlab:
-        repos.extend(get_gl_repos_list(args.gl_token, include_private=args.include_private))
-    random.shuffle(repos)
+        try:
+            repos.extend(get_gh_repos_list(args.gh_token))
+        except Exception as e:
+            were_errors = True
+            logging.exception(f'Error when requesting GitHub repos: {e}')
 
+    if args.bitbucket:
+        try:
+            repos.extend(get_bb_repos_list(args.bb_user, args.bb_password))
+        except Exception as e:
+            were_errors = True
+            logging.exception(f'Error when requesting BitBucket repos: {e}')
+
+    if args.gitlab:
+        try:
+            repos.extend(get_gl_repos_list(args.gl_token))
+        except Exception as e:
+            were_errors = True
+            logging.exception(f'Error when requesting GitLab repos: {e}')
+
+    random.shuffle(repos)
     repos_count = len(repos)
     logging.info(f'Have {repos_count} repos to backup')
 
@@ -78,7 +93,11 @@ def main() -> None:
                 logging.info(f'Waiting for {w_time} seconds…')
                 time.sleep(w_time)
         except Exception as e:
+            were_errors = True
             logging.exception(f'Unexpected error when handling repo {git_url}: {e}')
+
+    if were_errors:
+        sys.exit(1)
 
 
 def get_args() -> Args:
@@ -88,7 +107,6 @@ def get_args() -> Args:
     parser.add_argument('--github', action='store_true')
     parser.add_argument('--bitbucket', action='store_true')
     parser.add_argument('--gitlab', action='store_true')
-    parser.add_argument('--no-private', action='store_true')
     parser.add_argument('--gh-token-file', default='~/.tokens/github-repos-list')
     parser.add_argument('--bb-auth-file', default='~/.tokens/bitbucket-repos-list')
     parser.add_argument('--gl-token-file', default='~/.tokens/gitlab-repos-list')
@@ -125,7 +143,6 @@ def get_args() -> Args:
         github=raw_args.github,
         bitbucket=raw_args.bitbucket,
         gitlab=raw_args.gitlab,
-        include_private=(not raw_args.no_private),
 
         gh_token=gh_token,
         bb_user=bb_user,
@@ -160,13 +177,12 @@ def read_text_file(file_path: str) -> str:
 
 def get_gh_repos_list(
     gh_token: str,
-    include_private: bool = True,
     query_params: tp.Optional[tp.Dict] = None,
 ) -> tp.List[str]:
     query_params = query_params or {}
     cur_page = unwrap_query_param(query_params.setdefault('page', '1'))
 
-    query_params.setdefault('visibility', 'all' if include_private else 'public')
+    query_params.setdefault('visibility', 'all')
     query_params.setdefault('per_page', '100')
 
     resp = make_gh_api_request(gh_token, '/user/repos', query_params=query_params)
@@ -178,11 +194,8 @@ def get_gh_repos_list(
 
         full_query_params = query_params.copy()
         full_query_params.update(next_url_params)
-        result.extend(get_gh_repos_list(
-            gh_token,
-            include_private=include_private,
-            query_params=full_query_params,
-        ))
+
+        result.extend(get_gh_repos_list(gh_token, query_params=full_query_params))
 
     return result
 
@@ -243,7 +256,6 @@ def make_gh_api_request(
 def get_bb_repos_list(
     bb_user: str,
     bb_password: str,
-    include_private: bool = True,
     query_params: tp.Optional[tp.Dict] = None,
 ) -> tp.List[str]:
     query_params = query_params or {}
@@ -254,9 +266,6 @@ def get_bb_repos_list(
 
     result = []
     for item in resp_json['values']:
-        if item['is_private'] and not include_private:
-            continue
-
         ssh_clone_link = None
         for link_data in item['links']['clone']:
             if link_data['name'] == 'ssh':
@@ -272,7 +281,6 @@ def get_bb_repos_list(
         result.extend(get_bb_repos_list(
             bb_user,
             bb_password,
-            include_private=include_private,
             query_params=next_url_params,
         ))
 
@@ -300,7 +308,6 @@ def make_bb_api_request(
 
 def get_gl_repos_list(
     gl_token: str,
-    include_private: bool = True,
     query_params: tp.Optional[tp.Dict] = None,
 ) -> tp.List[str]:
     query_params = query_params or {}
@@ -312,9 +319,6 @@ def get_gl_repos_list(
     query_params.setdefault('order_by', 'created_at')
     query_params.setdefault('sort', 'desc')
 
-    if not include_private:
-        query_params.setdefault('visibility', 'public')
-
     resp = make_gl_api_request(gl_token, '/projects', query_params=query_params)
     result = [x['ssh_url_to_repo'] for x in resp.json()]
 
@@ -324,11 +328,8 @@ def get_gl_repos_list(
 
         full_query_params = query_params.copy()
         full_query_params.update(next_url_params)
-        result.extend(get_gl_repos_list(
-            gl_token,
-            include_private=include_private,
-            query_params=full_query_params,
-        ))
+
+        result.extend(get_gl_repos_list(gl_token, query_params=full_query_params))
 
     return result
 
