@@ -22,7 +22,8 @@ DEFAULT_GIT_OP_TIMEOUT = 3600
 next_page_re = re.compile(r'.*<(?P<next_url>[^>]+)>; rel="next".*')
 last_page_re = re.compile(r'.*<(?P<next_url>[^>]+)>; rel="last".*')
 
-git_suffix_re = re.compile(r'(.*)(?:\.git)?$')
+git_suffix_re = re.compile(r'(.*?)(?:\.git)?$')
+git_prefix_re = re.compile(r'^git@')
 non_path_symbols_re = re.compile(r'[:\\?"\'<>|+%!@]+|\.\.')
 
 git_op_timeout = DEFAULT_GIT_OP_TIMEOUT
@@ -84,13 +85,14 @@ def main() -> None:
     repos_count = len(repos)
     logging.info(f'Have {repos_count} repos to backup')
 
-    last_repo = repos_count - 1
     for idx, git_url in enumerate(repos):
+        cnt = idx + 1
+        logging.info(f'Backing up [{cnt}/{repos_count}]: {git_url}')
         try:
             backup_repo(git_url, args.backup_dir)
-            if idx < last_repo:
+            if cnt < repos_count:
                 w_time = random.randint(1, 10)
-                logging.info(f'Waiting for {w_time} seconds…')
+                logging.info(f'Waiting for {w_time} seconds')
                 time.sleep(w_time)
         except Exception as e:
             were_errors = True
@@ -170,7 +172,10 @@ def setup_logging(args: Args) -> None:
     )
 
 
-def read_text_file(file_path: str) -> str:
+def read_text_file(file_path: str, error_message: str = 'File is required: {file}') -> str:
+    if not os.path.exists(file_path):
+        raise Exception(error_message.format(file=file_path))
+
     with open(file_path) as fp:
         return fp.read().strip()
 
@@ -192,10 +197,7 @@ def get_gh_repos_list(
         if check_cur_page_is_last(next_url_params, cur_page):
             return result
 
-        full_query_params = query_params.copy()
-        full_query_params.update(next_url_params)
-
-        result.extend(get_gh_repos_list(gh_token, query_params=full_query_params))
+        result.extend(get_gh_repos_list(gh_token, query_params={**query_params, **next_url_params}))
 
     return result
 
@@ -294,7 +296,7 @@ def make_bb_api_request(
     http_method: str = 'GET',
     query_params: tp.Optional[tp.Dict] = None,
     data: tp.Optional[tp.Dict] = None,
-):
+) -> Response:
     url_query = urllib.parse.urlencode(query_params or {}, doseq=True)
     resp = http_session.request(
         method=http_method,
@@ -326,10 +328,7 @@ def get_gl_repos_list(
         if check_cur_page_is_last(next_url_params, cur_page):
             return result
 
-        full_query_params = query_params.copy()
-        full_query_params.update(next_url_params)
-
-        result.extend(get_gl_repos_list(gl_token, query_params=full_query_params))
+        result.extend(get_gl_repos_list(gl_token, query_params={**query_params, **next_url_params}))
 
     return result
 
@@ -353,19 +352,18 @@ def make_gl_api_request(
 
 
 def backup_repo(git_url: str, backup_dir: str) -> None:
-    logging.info(f'Backing up {git_url}…')
     start_time = time.perf_counter()
 
     url_data = urllib.parse.urlparse(f'ssh://{git_url}')
-    repo_dir = non_path_symbols_re.sub(
-        '_',
-        os.path.join(
-            backup_dir,
-            url_data.netloc,
-            git_suffix_re.sub(r'\1', url_data.path)[1:]
-        )
-    )
-    logging.info(f'Using dir {repo_dir}')
+    host_data = git_prefix_re.sub('', url_data.netloc).split(':', 1)
+
+    host, user_name = host_data[0], 'unknown'
+    if len(host_data) > 1:
+        host, user_name = host_data[0], host_data[1]
+    last_path_part = git_suffix_re.sub(r'\1', url_data.path)[1:]
+
+    repo_dir = non_path_symbols_re.sub('_', os.path.join(backup_dir, host, user_name, last_path_part))
+    logging.info(f'Using dir: {repo_dir}')
 
     is_new_repo = not os.path.exists(repo_dir)
     os.makedirs(repo_dir, exist_ok=True)
