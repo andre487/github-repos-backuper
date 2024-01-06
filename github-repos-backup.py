@@ -172,7 +172,7 @@ def setup_logging(args: Args) -> None:
     log_handlers = [logging.StreamHandler()]
     if args.logs_dir:
         log_handlers.append(logging.handlers.RotatingFileHandler(
-            filename=os.path.join(args.logs_dir, 'github-repos-backup.log'),
+            filename=os.path.join(os.path.expanduser(args.logs_dir), 'github-repos-backup.log'),
             maxBytes=1024 * 1024,
             backupCount=1,
         ))
