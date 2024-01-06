@@ -32,10 +32,15 @@ http_session = Session()
 http_session.mount(
     'https://',
     HTTPAdapter(max_retries=Retry(
-        total=5,
-        backoff_factor=0.1,
-        status_forcelist=(429, 500, 501, 502, 503, 504),
+        total=10,
+        connect=5,
+        read=5,
+        status=5,
+        other=5,
+        backoff_factor=2,
+        status_forcelist=(429, 500, 502, 503, 504),
         raise_on_redirect=False,
+        raise_on_status=False,
     ))
 )
 
