@@ -63,27 +63,29 @@ def main() -> None:
     args = get_args()
     setup_logging(args)
 
-    were_errors = False
+    errors_count = 0
+    failed_repos = []
+
     repos = []
     if args.github:
         try:
             repos.extend(get_gh_repos_list(args.gh_token))
         except Exception as e:
-            were_errors = True
+            errors_count += 1
             logging.exception(f'Error when requesting GitHub repos: {e}')
 
     if args.bitbucket:
         try:
             repos.extend(get_bb_repos_list(args.bb_user, args.bb_password))
         except Exception as e:
-            were_errors = True
+            errors_count += 1
             logging.exception(f'Error when requesting BitBucket repos: {e}')
 
     if args.gitlab:
         try:
             repos.extend(get_gl_repos_list(args.gl_token))
         except Exception as e:
-            were_errors = True
+            errors_count += 1
             logging.exception(f'Error when requesting GitLab repos: {e}')
 
     random.shuffle(repos)
@@ -100,13 +102,16 @@ def main() -> None:
                 logging.info(f'Waiting for {w_time} seconds')
                 time.sleep(w_time)
         except Exception as e:
-            were_errors = True
+            errors_count += 1
+            failed_repos.append(git_url)
             logging.exception(f'Unexpected error when handling repo {git_url}: {e}')
             if isinstance(e, sp.CalledProcessError):
                 logging.error(f'Process STDOUT: {e.stdout}')
                 logging.error(f'Process STDERR: {e.stderr}')
 
-    if were_errors:
+    if errors_count:
+        logging.error(f'Errors occurred: {errors_count}')
+        logging.error(f'Failed repos: {", ".join(failed_repos)}')
         sys.exit(1)
 
 
