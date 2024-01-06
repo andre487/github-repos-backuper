@@ -17,7 +17,7 @@ from requests.adapters import HTTPAdapter, Retry
 GH_API_BASE = 'https://api.github.com'
 BB_API_BASE = 'https://api.bitbucket.org/2.0'
 GL_API_BASE = 'https://gitlab.com/api/v4'
-DEFAULT_GIT_OP_TIMEOUT = 3600
+DEFAULT_GIT_OP_TIMEOUT = 300
 
 next_page_re = re.compile(r'.*<(?P<next_url>[^>]+)>; rel="next".*')
 last_page_re = re.compile(r'.*<(?P<next_url>[^>]+)>; rel="last".*')
@@ -105,16 +105,20 @@ def main() -> None:
 def get_args() -> Args:
     global git_op_timeout
 
-    parser = argparse.ArgumentParser()
-    parser.add_argument('--github', action='store_true')
-    parser.add_argument('--bitbucket', action='store_true')
-    parser.add_argument('--gitlab', action='store_true')
-    parser.add_argument('--gh-token-file', default='~/.tokens/github-repos-list')
-    parser.add_argument('--bb-auth-file', default='~/.tokens/bitbucket-repos-list')
-    parser.add_argument('--gl-token-file', default='~/.tokens/gitlab-repos-list')
-    parser.add_argument('--backup-dir', default='/tmp/gh-repos-backup')
-    parser.add_argument('--git-op-timeout', type=int, default=DEFAULT_GIT_OP_TIMEOUT)
-    parser.add_argument('--logs-dir')
+    parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
+    parser.add_argument('--github', action='store_true', help='Backup GitHub')
+    parser.add_argument('--bitbucket', action='store_true', help='Backup BitBucket')
+    parser.add_argument('--gitlab', action='store_true', help='Backup GitLab')
+    parser.add_argument('--gh-token-file', default='~/.tokens/github-repos-list', help='GitHub token file')
+    parser.add_argument(
+        '--bb-auth-file',
+        default='~/.tokens/bitbucket-repos-list',
+        help='ButBucket auth file. Format: "<login>\\n<app_password>"',
+    )
+    parser.add_argument('--gl-token-file', default='~/.tokens/gitlab-repos-list', help='GitLab token file')
+    parser.add_argument('--backup-dir', default='/tmp/gh-repos-backup', help='Directory where repos will be stored')
+    parser.add_argument('--git-op-timeout', type=int, default=DEFAULT_GIT_OP_TIMEOUT, help='Timeout for git calls')
+    parser.add_argument('--logs-dir', help='Optional directory for log files')
     raw_args = parser.parse_args()
 
     if not (raw_args.github or raw_args.bitbucket or raw_args.gitlab):
@@ -132,7 +136,7 @@ def get_args() -> Args:
         bb_auth_file = os.path.expanduser(raw_args.bb_auth_file)
         bb_auth_data = read_text_file(bb_auth_file).splitlines()
         if len(bb_auth_data) < 2:
-            raise Exception('BitBucket auth file should contain lines: <login>\\n<app_password>')
+            raise Exception('BitBucket auth file should contain lines: "<login>\\n<app_password>"')
         bb_user = bb_auth_data[0].strip()
         bb_password = bb_auth_data[1].strip()
 
