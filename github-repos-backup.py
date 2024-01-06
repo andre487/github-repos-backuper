@@ -105,9 +105,6 @@ def main() -> None:
             errors_count += 1
             failed_repos.append(git_url)
             logging.exception(f'Unexpected error when handling repo {git_url}: {e}')
-            if isinstance(e, sp.CalledProcessError):
-                logging.error(f'Process STDOUT: {e.stdout}')
-                logging.error(f'Process STDERR: {e.stderr}')
 
     if errors_count:
         logging.error(f'Errors occurred: {errors_count}')
@@ -382,14 +379,31 @@ def backup_repo(git_url: str, backup_dir: str) -> None:
     repo_dir = non_path_symbols_re.sub('_', os.path.join(backup_dir, host, user_name, last_path_part))
     logging.info(f'Using dir: {repo_dir}')
 
-    is_new_repo = not os.path.exists(os.path.join(repo_dir, '.git'))
+    is_new_repo = not os.path.exists(os.path.join(repo_dir, 'objects'))
     os.makedirs(repo_dir, exist_ok=True)
     if is_new_repo:
-        sp.check_call(('git', 'clone', '--recurse-submodules', '--mirror', git_url, repo_dir), timeout=git_op_timeout)
-    sp.check_call(('git', 'fetch', '--all', '--recurse-submodules', '--tags'), cwd=repo_dir, timeout=git_op_timeout)
+        run_proc(('git', 'clone', '--recurse-submodules', '--mirror', git_url, repo_dir))
+    run_proc(('git', 'fetch', '--all', '--recurse-submodules', '--tags'), cwd=repo_dir)
 
     backup_time = time.perf_counter() - start_time
     logging.info(f'Backup time: {backup_time}')
+
+
+def run_proc(cmd: tp.Sequence[str], **kwargs) -> None:
+    try:
+        proc = sp.run(cmd, check=True, capture_output=True, timeout=git_op_timeout, encoding='utf8', **kwargs)
+    except (sp.CalledProcessError, sp.TimeoutExpired) as e:
+        logging.error(f'Command [{cmd}] failed: {type(e)}: {e}')
+        if e.stdout:
+            logging.error(f'Process STDOUT: {e.stdout}')
+        if e.stderr:
+            logging.error(f'Process STDERR: {e.stderr}')
+        raise
+
+    if proc.stdout:
+        logging.info(f'Command [{cmd}] STDOUT: {proc.stdout}')
+    if proc.stderr:
+        logging.info(f'Command [{cmd}] STDERR: {proc.stderr}')
 
 
 if __name__ == '__main__':
