@@ -28,33 +28,24 @@ pip3 install -r /tmp/github-repos-backup-requirements.txt
 ## Usage
 
 ```
-usage: github-repos-backup.py [-h] [--github] [--bitbucket] [--gitlab]
-                              [--gh-token-file GH_TOKEN_FILE]
-                              [--bb-auth-file BB_AUTH_FILE]
-                              [--gl-token-file GL_TOKEN_FILE]
-                              [--backup-dir BACKUP_DIR]
-                              [--git-op-timeout GIT_OP_TIMEOUT]
-                              [--logs-dir LOGS_DIR]
+usage: github-repos-backup.py [-h] [--github] [--bitbucket] [--gitlab] [--gh-token-file GH_TOKEN_FILE] [--bb-auth-file BB_AUTH_FILE]
+                              [--gl-token-file GL_TOKEN_FILE] [--backup-dir BACKUP_DIR] [--git-op-timeout GIT_OP_TIMEOUT] [--logs-dir LOGS_DIR]
 
-options:
+optional arguments:
   -h, --help            show this help message and exit
   --github              Backup GitHub (default: False)
   --bitbucket           Backup BitBucket (default: False)
   --gitlab              Backup GitLab (default: False)
   --gh-token-file GH_TOKEN_FILE
-                        GitHub token file (default: ~/.tokens/github-repos-
-                        list)
+                        GitHub token file (default: ~/.tokens/github-repos-list)
   --bb-auth-file BB_AUTH_FILE
-                        ButBucket auth file. Format: "<login>\n<app_password>"
-                        (default: ~/.tokens/bitbucket-repos-list)
+                        ButBucket auth file. Format: "<login>\n<app_password>" (default: ~/.tokens/bitbucket-repos-list)
   --gl-token-file GL_TOKEN_FILE
-                        GitLab token file (default: ~/.tokens/gitlab-repos-
-                        list)
+                        GitLab token file (default: ~/.tokens/gitlab-repos-list)
   --backup-dir BACKUP_DIR
-                        Directory where repos will be stored (default:
-                        /tmp/gh-repos-backup)
+                        Directory where repos will be stored (default: /tmp/gh-repos-backup)
   --git-op-timeout GIT_OP_TIMEOUT
-                        Timeout for git calls (default: 300)
+                        Timeout for git calls (default: 600)
   --logs-dir LOGS_DIR   Optional directory for log files (default: None)
 ```
 

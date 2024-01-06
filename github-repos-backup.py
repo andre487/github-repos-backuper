@@ -17,7 +17,7 @@ from requests.adapters import HTTPAdapter, Retry
 GH_API_BASE = 'https://api.github.com'
 BB_API_BASE = 'https://api.bitbucket.org/2.0'
 GL_API_BASE = 'https://gitlab.com/api/v4'
-DEFAULT_GIT_OP_TIMEOUT = 300
+DEFAULT_GIT_OP_TIMEOUT = 600
 
 next_page_re = re.compile(r'.*<(?P<next_url>[^>]+)>; rel="next".*')
 last_page_re = re.compile(r'.*<(?P<next_url>[^>]+)>; rel="last".*')
