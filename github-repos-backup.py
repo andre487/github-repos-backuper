@@ -19,8 +19,11 @@ GL_API_BASE = 'https://gitlab.com/api/v4'
 DEFAULT_GIT_OP_TIMEOUT = 3600
 
 next_page_re = re.compile(r'.*<(?P<next_url>[^>]+)>; rel="next".*')
+last_page_re = re.compile(r'.*<(?P<next_url>[^>]+)>; rel="last".*')
+
 git_suffix_re = re.compile(r'(.*)(?:\.git)?$')
 non_path_symbols_re = re.compile(r'[:\\?"\'<>|+%!@]+|\.\.')
+
 git_op_timeout = DEFAULT_GIT_OP_TIMEOUT
 
 http_session = Session()
@@ -29,7 +32,7 @@ http_session.mount(
     HTTPAdapter(max_retries=Retry(
         total=5,
         backoff_factor=0.1,
-        status_forcelist=(403, 429, 500, 501, 502, 503, 504),
+        status_forcelist=(429, 500, 501, 502, 503, 504),
         raise_on_redirect=False,
     ))
 )
@@ -38,14 +41,13 @@ http_session.mount(
 class Args(tp.NamedTuple):
     github: bool
     bitbucket: bool
+    gitlab: bool
     include_private: bool
 
-    gh_token_file: tp.Optional[str]
     gh_token: tp.Optional[str]
-
-    bb_auth_file: tp.Optional[str]
     bb_user: tp.Optional[str]
     bb_password: tp.Optional[str]
+    gl_token: tp.Optional[str]
 
     backup_dir: str
     logs_dir: tp.Optional[str]
@@ -59,7 +61,9 @@ def main() -> None:
     if args.github:
         repos.extend(get_gh_repos_list(args.gh_token, include_private=args.include_private))
     if args.bitbucket:
-        repos.extend(get_bb_repos_list(args.bb_user, args.bb_password))
+        repos.extend(get_bb_repos_list(args.bb_user, args.bb_password, include_private=args.include_private))
+    if args.gitlab:
+        repos.extend(get_gl_repos_list(args.gl_token, include_private=args.include_private))
     random.shuffle(repos)
 
     repos_count = len(repos)
@@ -83,25 +87,27 @@ def get_args() -> Args:
     parser = argparse.ArgumentParser()
     parser.add_argument('--github', action='store_true')
     parser.add_argument('--bitbucket', action='store_true')
+    parser.add_argument('--gitlab', action='store_true')
     parser.add_argument('--no-private', action='store_true')
     parser.add_argument('--gh-token-file', default='~/.tokens/github-repos-list')
     parser.add_argument('--bb-auth-file', default='~/.tokens/bitbucket-repos-list')
-    parser.add_argument('--backup-dir', default='/tmp/gh-repos-backup', required=True)
+    parser.add_argument('--gl-token-file', default='~/.tokens/gitlab-repos-list')
+    parser.add_argument('--backup-dir', default='/tmp/gh-repos-backup')
     parser.add_argument('--git-op-timeout', type=int, default=DEFAULT_GIT_OP_TIMEOUT)
     parser.add_argument('--logs-dir')
     raw_args = parser.parse_args()
 
-    if not (raw_args.github or raw_args.bitbucket):
+    if not (raw_args.github or raw_args.bitbucket or raw_args.gitlab):
         parser.error('At least one service should be selected')
 
     git_op_timeout = raw_args.git_op_timeout
 
-    gh_token = gh_token_file = None
+    gh_token = None
     if raw_args.github:
         gh_token_file = os.path.expanduser(raw_args.gh_token_file)
         gh_token = read_text_file(gh_token_file)
 
-    bb_user = bb_password = bb_auth_file = None
+    bb_user = bb_password = None
     if raw_args.bitbucket:
         bb_auth_file = os.path.expanduser(raw_args.bb_auth_file)
         bb_auth_data = read_text_file(bb_auth_file).splitlines()
@@ -110,17 +116,21 @@ def get_args() -> Args:
         bb_user = bb_auth_data[0].strip()
         bb_password = bb_auth_data[1].strip()
 
+    gl_token = None
+    if raw_args.gitlab:
+        gl_token_file = os.path.expanduser(raw_args.gl_token_file)
+        gl_token = read_text_file(gl_token_file)
+
     return Args(
         github=raw_args.github,
         bitbucket=raw_args.bitbucket,
+        gitlab=raw_args.gitlab,
         include_private=(not raw_args.no_private),
 
-        gh_token_file=gh_token_file,
         gh_token=gh_token,
-
-        bb_auth_file=bb_auth_file,
         bb_user=bb_user,
         bb_password=bb_password,
+        gl_token=gl_token,
 
         backup_dir=os.path.expanduser(raw_args.backup_dir),
         logs_dir=raw_args.logs_dir,
@@ -154,23 +164,58 @@ def get_gh_repos_list(
     query_params: tp.Optional[tp.Dict] = None,
 ) -> tp.List[str]:
     query_params = query_params or {}
+    cur_page = unwrap_query_param(query_params.setdefault('page', '1'))
+
     query_params.setdefault('visibility', 'all' if include_private else 'public')
     query_params.setdefault('per_page', '100')
-    query_params.setdefault('page', '1')
 
     resp = make_gh_api_request(gh_token, '/user/repos', query_params=query_params)
     result = [x['ssh_url'] for x in resp.json()]
 
-    if next_matches := next_page_re.match(resp.headers.get('link', '')):
-        next_url_data = urllib.parse.urlparse(next_matches.group('next_url'))
-        next_url_params = urllib.parse.parse_qs(next_url_data.query)
+    if next_url_params := get_next_url_params_from_link(resp.headers.get('link')):
+        if check_cur_page_is_last(next_url_params, cur_page):
+            return result
+
+        full_query_params = query_params.copy()
+        full_query_params.update(next_url_params)
         result.extend(get_gh_repos_list(
             gh_token,
             include_private=include_private,
-            query_params={'page': next_url_params['page']},
+            query_params=full_query_params,
         ))
 
     return result
+
+
+def unwrap_query_param(val: tp.Union[str, tp.List[str], None]) -> tp.Optional[str]:
+    if val is None:
+        return None
+
+    if isinstance(val, (list, tuple)) and val:
+        return val[0]
+
+    return str(val)
+
+
+def get_next_url_params_from_link(link_header: tp.Optional[str]) -> tp.Optional[tp.Dict]:
+    if not link_header:
+        return None
+
+    next_url = None
+    if matches := next_page_re.match(link_header):
+        next_url = matches.group('next_url')
+    elif matches := last_page_re.match(link_header):
+        next_url = matches.group('next_url')
+
+    if not next_url:
+        return None
+
+    next_url_data = urllib.parse.urlparse(next_url)
+    return urllib.parse.parse_qs(next_url_data.query)
+
+
+def check_cur_page_is_last(next_url_params: tp.Dict, cur_page: str) -> bool:
+    return next_url_params.get('page', (cur_page,))[0] == cur_page
 
 
 def make_gh_api_request(
@@ -247,6 +292,59 @@ def make_bb_api_request(
         method=http_method,
         url=f'{BB_API_BASE}{handler}?{url_query}',
         auth=(bb_user, bb_password),
+        data=data,
+    )
+    resp.raise_for_status()
+    return resp
+
+
+def get_gl_repos_list(
+    gl_token: str,
+    include_private: bool = True,
+    query_params: tp.Optional[tp.Dict] = None,
+) -> tp.List[str]:
+    query_params = query_params or {}
+    cur_page = unwrap_query_param(query_params.setdefault('page', '1'))
+
+    query_params.setdefault('membership', 'true')
+    query_params.setdefault('simple', 'true')
+    query_params.setdefault('per_page', '100')
+    query_params.setdefault('order_by', 'created_at')
+    query_params.setdefault('sort', 'desc')
+
+    if not include_private:
+        query_params.setdefault('visibility', 'public')
+
+    resp = make_gl_api_request(gl_token, '/projects', query_params=query_params)
+    result = [x['ssh_url_to_repo'] for x in resp.json()]
+
+    if next_url_params := get_next_url_params_from_link(resp.headers.get('link')):
+        if check_cur_page_is_last(next_url_params, cur_page):
+            return result
+
+        full_query_params = query_params.copy()
+        full_query_params.update(next_url_params)
+        result.extend(get_gl_repos_list(
+            gl_token,
+            include_private=include_private,
+            query_params=full_query_params,
+        ))
+
+    return result
+
+
+def make_gl_api_request(
+    gl_token: str,
+    handler: str,
+    http_method: str = 'GET',
+    query_params: tp.Optional[tp.Dict] = None,
+    data: tp.Optional[tp.Dict] = None,
+) -> Response:
+    url_query = urllib.parse.urlencode(query_params or {}, doseq=True)
+    resp = http_session.request(
+        method=http_method,
+        url=f'{GL_API_BASE}{handler}?{url_query}',
+        headers={'PRIVATE-TOKEN': gl_token},
         data=data,
     )
     resp.raise_for_status()
