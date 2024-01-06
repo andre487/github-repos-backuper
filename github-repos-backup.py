@@ -102,6 +102,9 @@ def main() -> None:
         except Exception as e:
             were_errors = True
             logging.exception(f'Unexpected error when handling repo {git_url}: {e}')
+            if isinstance(e, sp.CalledProcessError):
+                logging.error(f'Process STDOUT: {e.stdout}')
+                logging.error(f'Process STDERR: {e.stderr}')
 
     if were_errors:
         sys.exit(1)
