@@ -18,6 +18,7 @@ GH_API_BASE = 'https://api.github.com'
 BB_API_BASE = 'https://api.bitbucket.org/2.0'
 GL_API_BASE = 'https://gitlab.com/api/v4'
 DEFAULT_GIT_OP_TIMEOUT = 600
+DEFAULT_REQUEST_TIMEOUT = 120
 WAIT_BETWEEN_REPOS = False
 
 next_page_re = re.compile(r'.*<(?P<next_url>[^>]+)>; rel="next".*')
@@ -39,6 +40,8 @@ http_session.mount(
         status=5,
         other=5,
         backoff_factor=2,
+        backoff_max=120,
+        backoff_jitter=0.1,
         status_forcelist=(429, 500, 502, 503, 504),
         raise_on_redirect=False,
         raise_on_status=False,
@@ -267,6 +270,7 @@ def make_gh_api_request(
             'X-GitHub-Api-Version': '2022-11-28',
         },
         data=data,
+        timeout=DEFAULT_REQUEST_TIMEOUT,
     )
     resp.raise_for_status()
     return resp
@@ -320,6 +324,7 @@ def make_bb_api_request(
         url=f'{BB_API_BASE}{handler}?{url_query}',
         auth=(bb_user, bb_password),
         data=data,
+        timeout=DEFAULT_REQUEST_TIMEOUT,
     )
     resp.raise_for_status()
     return resp
@@ -363,6 +368,7 @@ def make_gl_api_request(
         url=f'{GL_API_BASE}{handler}?{url_query}',
         headers={'PRIVATE-TOKEN': gl_token},
         data=data,
+        timeout=DEFAULT_REQUEST_TIMEOUT,
     )
     resp.raise_for_status()
     return resp
