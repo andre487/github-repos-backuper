@@ -40,7 +40,6 @@ http_session.mount(
         status=5,
         other=5,
         backoff_factor=2,
-        backoff_jitter=0.1,
         status_forcelist=(429, 500, 502, 503, 504),
         raise_on_redirect=False,
         raise_on_status=False,
